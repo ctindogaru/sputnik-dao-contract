@@ -294,9 +294,9 @@ impl Contract {
                 let balance = near_sdk::serde_json::from_slice::<StorageBalance>(&result).unwrap();
 
                 // Pay back the proposal bond - registration fee.
-                Promise::new(proposer_account.clone())
-                    .transfer(attached_deposit.0 - balance.total.0);
+                Promise::new(proposer_account).transfer(attached_deposit.0 - balance.total.0);
                 self.internal_payout(&token_id, &receiver_id, amount.0, memo, msg)
+                    .into()
             }
         }
     }
@@ -312,7 +312,7 @@ impl Contract {
         attached_deposit: U128,
         memo: String,
         msg: Option<String>,
-    ) -> PromiseOrValue<()> {
+    ) -> Promise {
         assert_eq!(
             env::promise_results_count(),
             1,
@@ -346,7 +346,7 @@ impl Contract {
                     )
                     .then(ext_self::callback_after_storage_deposit(
                         token_id.clone(),
-                        proposer_account.clone(),
+                        proposer_account,
                         receiver_id.clone(),
                         amount,
                         attached_deposit,
@@ -354,9 +354,8 @@ impl Contract {
                         msg,
                         env::current_account_id(),
                         0,
-                        env::prepaid_gas() - env::used_gas() - GAS_FOR_COMMON_OPERATIONS,
+                        env::prepaid_gas() - GAS_FOR_COMMON_OPERATIONS * 3,
                     ))
-                    .into()
                 }
             }
         }
@@ -372,7 +371,7 @@ impl Contract {
         amount: Balance,
         memo: String,
         msg: Option<String>,
-    ) -> PromiseOrValue<()> {
+    ) -> Promise {
         if let Some(msg) = msg {
             ext_fungible_token::ft_transfer_call(
                 receiver_id.clone(),
@@ -383,7 +382,6 @@ impl Contract {
                 ONE_YOCTO_NEAR,
                 GAS_FOR_FT_TRANSFER,
             )
-            .into()
         } else {
             ext_fungible_token::ft_transfer(
                 receiver_id.clone(),
@@ -393,7 +391,6 @@ impl Contract {
                 ONE_YOCTO_NEAR,
                 GAS_FOR_FT_TRANSFER,
             )
-            .into()
         }
     }
 
@@ -409,15 +406,16 @@ impl Contract {
     ) -> PromiseOrValue<()> {
         if token_id.is_none() {
             Promise::new(proposer_account.clone()).transfer(attached_deposit.0);
-            Promise::new(receiver_id.clone()).transfer(amount.0).into()
+            Promise::new(receiver_id.clone()).transfer(amount.0);
+            PromiseOrValue::Value(())
         } else {
-            ext_storage_management::storage_balance_of(
+            let check_balance = ext_storage_management::storage_balance_of(
                 receiver_id.clone(),
                 token_id.as_ref().unwrap().clone(),
                 0,
                 GAS_FOR_COMMON_OPERATIONS,
-            )
-            .then(ext_self::callback_after_storage_balance_of(
+            );
+            let check_callback = ext_self::callback_after_storage_balance_of(
                 token_id.as_ref().unwrap().clone(),
                 proposer_account.clone(),
                 receiver_id.clone(),
@@ -427,9 +425,9 @@ impl Contract {
                 msg,
                 env::current_account_id(),
                 0,
-                env::prepaid_gas() - env::used_gas() - GAS_FOR_COMMON_OPERATIONS,
-            ))
-            .into()
+                env::prepaid_gas() - GAS_FOR_COMMON_OPERATIONS * 2,
+            );
+            check_balance.then(check_callback).into()
         }
     }
 
@@ -505,11 +503,11 @@ impl Contract {
                 amount,
                 msg,
             } => self.internal_try_register_and_payout(
-                &token_id,
+                token_id,
                 &proposal.proposer,
-                &receiver_id.clone().into(),
-                amount.clone(),
-                policy.proposal_bond.clone(),
+                &receiver_id.clone(),
+                *amount,
+                policy.proposal_bond,
                 proposal.description.clone(),
                 msg.clone(),
             ),
@@ -626,7 +624,12 @@ impl Contract {
 
     /// Act on given proposal by id, if permissions allow.
     /// Memo is logged but not stored in the state. Can be used to leave notes or explain the action.
-    pub fn act_proposal(&mut self, id: u64, action: Action, memo: Option<String>) {
+    pub fn act_proposal(
+        &mut self,
+        id: u64,
+        action: Action,
+        memo: Option<String>,
+    ) -> PromiseOrValue<()> {
         let mut proposal: Proposal = self.proposals.get(&id).expect("ERR_NO_PROPOSAL").into();
         let policy = self.policy.get().unwrap().to_policy();
         // Check permissions for the given action.
@@ -635,11 +638,11 @@ impl Contract {
         assert!(allowed, "ERR_PERMISSION_DENIED");
         let sender_id = env::predecessor_account_id();
         // Update proposal given action. Returns true if should be updated in storage.
-        let update = match action {
+        let (update, ret) = match action {
             Action::AddProposal => env::panic_str("ERR_WRONG_ACTION"),
             Action::RemoveProposal => {
                 self.proposals.remove(&id);
-                false
+                (false, PromiseOrValue::Value(()))
             }
             Action::VoteApprove | Action::VoteReject | Action::VoteRemove => {
                 assert_eq!(
@@ -658,18 +661,18 @@ impl Contract {
                 proposal.status =
                     policy.proposal_status(&proposal, roles, self.total_delegation_amount);
                 if proposal.status == ProposalStatus::Approved {
-                    self.internal_execute_proposal(&policy, &proposal);
-                    true
+                    let ret = self.internal_execute_proposal(&policy, &proposal);
+                    (true, ret)
                 } else if proposal.status == ProposalStatus::Removed {
                     self.internal_reject_proposal(&policy, &proposal, false);
                     self.proposals.remove(&id);
-                    false
+                    (false, PromiseOrValue::Value(()))
                 } else if proposal.status == ProposalStatus::Rejected {
                     self.internal_reject_proposal(&policy, &proposal, true);
-                    true
+                    (true, PromiseOrValue::Value(()))
                 } else {
                     // Still in progress or expired.
-                    true
+                    (true, PromiseOrValue::Value(()))
                 }
             }
             Action::Finalize => {
@@ -684,9 +687,9 @@ impl Contract {
                     "ERR_PROPOSAL_NOT_EXPIRED"
                 );
                 self.internal_reject_proposal(&policy, &proposal, true);
-                true
+                (true, PromiseOrValue::Value(()))
             }
-            Action::MoveToHub => false,
+            Action::MoveToHub => (false, PromiseOrValue::Value(())),
         };
         if update {
             self.proposals
@@ -695,5 +698,6 @@ impl Contract {
         if let Some(memo) = memo {
             log!("Memo: {}", memo);
         }
+        ret
     }
 }

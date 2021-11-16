@@ -264,6 +264,13 @@ fn test_registration_on_payment() {
 
     let proposal = view!(dao.get_proposal(proposal_id)).unwrap_json::<Proposal>();
     assert_eq!(proposal.status, ProposalStatus::Approved);
+
+    assert_eq!(
+        view!(test_token.ft_balance_of(receiver_account.account_id()))
+            .unwrap_json::<U128>()
+            .0,
+        50
+    );
 }
 
 /// Test various cases that must fail.
