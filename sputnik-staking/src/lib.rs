@@ -11,7 +11,7 @@ use near_sdk::{
 pub use user::{User, VersionedUser};
 
 mod storage_impl;
-mod user;
+mod user; 
 
 #[derive(BorshStorageKey, BorshSerialize)]
 enum StorageKeys {
