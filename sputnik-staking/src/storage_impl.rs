@@ -74,7 +74,7 @@ impl StorageManagement for Contract {
         } else {
             false
         }
-    }
+    } 
 
     fn storage_balance_bounds(&self) -> StorageBalanceBounds {
         StorageBalanceBounds {
