@@ -32,14 +32,6 @@ impl SputnikDAOFactory {
         this
     }
 
-    pub fn internal_store_initial_version(&self) {
-        let code = DAO_CONTRACT_CODE.to_vec();
-        let sha256_hash = env::sha256(&code);
-        env::storage_write(&sha256_hash, &code);
-
-        self.set_code_hash(slice_to_hash(&sha256_hash));
-    }
-
     pub fn set_owner(&self, owner_id: AccountId) {
         self.assert_owner();
         env::storage_write(OWNER_KEY, owner_id.as_bytes());
@@ -138,6 +130,14 @@ impl SputnikDAOFactory {
     /// Returns non serialized code by given code hash.
     pub fn get_code(&self, code_hash: Base58CryptoHash) {
         self.factory_manager.get_code(code_hash);
+    }
+
+    fn internal_store_initial_version(&self) {
+        self.assert_owner();
+        let code = DAO_CONTRACT_CODE.to_vec();
+        let sha256_hash = env::sha256(&code);
+        env::storage_write(LATEST_CODE_HASH_KEY, &sha256_hash);
+        env::storage_write(&sha256_hash, &code);
     }
 
     fn assert_owner(&self) {
