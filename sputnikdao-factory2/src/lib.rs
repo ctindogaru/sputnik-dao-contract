@@ -161,6 +161,7 @@ pub fn slice_to_hash(hash: &[u8]) -> Base58CryptoHash {
 pub extern "C" fn store() {
     env::setup_panic_hook();
     let contract: SputnikDAOFactory = env::state_read().expect("Contract is not initialized");
+    contract.assert_owner();
     let prev_storage = env::storage_usage();
     contract.factory_manager.store_contract();
     let storage_cost = (env::storage_usage() - prev_storage) as u128 * env::storage_byte_cost();
